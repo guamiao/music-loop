@@ -4,6 +4,9 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // GitHub Pages 部署在 /<仓库名>/ 子路径下，由 CI 通过 BASE_URL 注入；
+  // 本地开发和直接部署到根域名时为 '/'
+  base: process.env.BASE_URL || '/',
   plugins: [
     vue(),
     VitePWA({
