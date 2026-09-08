@@ -19,7 +19,7 @@ export default defineConfig({
         theme_color: '#101014',
         background_color: '#101014',
         display: 'standalone',
-        start_url: '/',
+        // start_url 不手动指定，由插件根据 base 自动生成（GitHub Pages 子路径下也能正确打开）
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
