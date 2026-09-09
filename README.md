@@ -143,4 +143,4 @@ npm run build && npm run preview   # 预览生产构建
 
 ## 更新日志
 
-见 [CHANGELOG.md](./CHANGELOG.md)。当前版本 **v1.0.2**。
+见 [CHANGELOG.md](./CHANGELOG.md)。当前版本 **v1.0.3**。

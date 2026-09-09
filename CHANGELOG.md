@@ -2,6 +2,16 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.3] - 2026-09-09
+
+> 本次更新仅改动应用代码（`.vue` / `.js`），用户端无需重新安装，Service Worker 会自动更新。
+
+### 修复
+
+- **提取音频时多次点击导致多个"提取中"按钮堆叠**：提取按钮加入 `busy` 防抖锁，提取期间完全禁止重复触发，从根源杜绝并发请求
+- **ffmpeg 核心文件加载偶发 NetworkError（Service Worker / iOS 后台限制）**：加载失败后自动重试 3 次，指数退避（2s → 4s → 8s），重试成功则正常继续，仍失败再向用户报错
+- **错误提示不够友好**：NetworkError 场景单独提示「网络加载 ffmpeg 核心文件失败，请检查网络后重试」，避免晦涩的 WASM RuntimeError 原始信息
+
 ## [1.0.2] - 2026-09-09
 
 ### 修复

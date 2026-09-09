@@ -25,7 +25,7 @@ const videoUrl = ref('')
 const duration = ref(0)
 const range = ref([0, 0])
 const name = ref('')
-const extracting = ref(false)
+const busy = ref(false)       // 防抖：整个提取流程期间锁定按钮
 const progress = ref(0)
 
 function pick() {
@@ -48,7 +48,8 @@ function onLoaded() {
 }
 
 async function doExtract() {
-  extracting.value = true
+  if (busy.value) return
+  busy.value = true
   progress.value = 0
   try {
     const blob = await extractAudio(
@@ -72,9 +73,14 @@ async function doExtract() {
     emit('done')
   } catch (err) {
     console.error(err)
-    message.error('提取失败：' + (err?.message || err))
+    const msg = err?.message || String(err)
+    if (msg.includes('NetworkError') || msg.includes('network') || msg.includes('Failed to fetch')) {
+      message.error('网络加载 ffmpeg 核心文件失败，请检查网络后重试')
+    } else {
+      message.error('提取失败：' + msg)
+    }
   } finally {
-    extracting.value = false
+    busy.value = false
   }
 }
 
@@ -100,7 +106,7 @@ function close() {
     preset="card"
     title="导入视频并提取音频"
     style="width: 640px"
-    :mask-closable="!extracting"
+    :mask-closable="!busy"
     @update:show="close"
   >
     <input
@@ -111,7 +117,7 @@ function close() {
       @change="onPicked"
     />
     <n-space vertical size="large">
-      <n-button :disabled="extracting" @click="pick">
+      <n-button :disabled="busy" @click="pick">
         {{ videoFile ? '重新选择视频' : '选择视频文件' }}
       </n-button>
       <template v-if="videoUrl">
@@ -134,25 +140,25 @@ function close() {
             :max="duration"
             :step="0.1"
             :format-tooltip="formatTime"
-            :disabled="extracting"
+            :disabled="busy"
           />
         </div>
         <n-input
           v-model:value="name"
           placeholder="给这段音频起个名字"
-          :disabled="extracting"
+          :disabled="busy"
         />
-        <n-progress v-if="extracting" type="line" :percentage="progress" />
+        <n-progress v-if="busy" type="line" :percentage="progress" />
         <n-button
           type="primary"
-          :loading="extracting"
+          :loading="busy"
           :disabled="!name.trim()"
           @click="doExtract"
         >
-          {{ extracting ? '提取中…' : '提取音频并存入音乐库' }}
+          {{ busy ? '提取中…' : '提取音频并存入音乐库' }}
         </n-button>
-        <n-text v-if="extracting" depth="3" style="font-size: 12px">
-          首次使用需要加载 ffmpeg 核心文件（约 25MB），请耐心等待
+        <n-text v-if="busy" depth="3" style="font-size: 12px">
+          正在加载 ffmpeg 核心文件并提取音频，请耐心等待…
         </n-text>
       </template>
     </n-space>

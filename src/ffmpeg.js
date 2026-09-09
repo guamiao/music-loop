@@ -1,25 +1,47 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
-// 核心文件从 node_modules 打包进来，不依赖任何 CDN，克隆项目后离线也能用
 import coreURL from '@ffmpeg/core?url'
 import wasmURL from '@ffmpeg/core/wasm?url'
 
 let ffmpeg = null
 let loading = null
 
-// 懒加载 ffmpeg 核心（首次使用时加载，约 25MB wasm）
+// 加载 wasm 时偶发 NetworkError（Service Worker / iOS 后台限制），带指数退避重试
+async function loadWithRetry(instance, opts, retries = 3, delay = 2000) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      await instance.load(opts)
+      return
+    } catch (err) {
+      const isNetwork =
+        err?.message?.includes('NetworkError') ||
+        err?.message?.includes('network') ||
+        err?.message?.includes('Failed to fetch')
+      if (isNetwork && i < retries) {
+        console.warn(`ffmpeg 加载失败（网络），${delay}ms 后重试 (${i + 1}/${retries})…`)
+        await new Promise((r) => setTimeout(r, delay))
+        delay *= 2 // 指数退避：2s → 4s → 8s
+        continue
+      }
+      throw err
+    }
+  }
+}
+
 export function getFFmpeg() {
   if (ffmpeg) return Promise.resolve(ffmpeg)
   if (loading) return loading
   const instance = new FFmpeg()
-  loading = instance.load({ coreURL, wasmURL }).then(() => {
+  loading = loadWithRetry(instance, { coreURL, wasmURL }).then(() => {
     ffmpeg = instance
     return ffmpeg
+  }).catch((err) => {
+    loading = null // 失败后清除缓存，下次可重试
+    throw err
   })
   return loading
 }
 
-// 从视频文件中截取 [start, end] 秒区间，提取为 MP3
 export async function extractAudio(videoFile, start, end, onProgress) {
   const ff = await getFFmpeg()
   const ext = videoFile.name.match(/\.\w+$/)?.[0] || '.mp4'
