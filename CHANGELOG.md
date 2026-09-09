@@ -2,6 +2,32 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.5] - 2026-09-09
+
+> 本次更新仅改动应用代码（`.vue` / `.js`），用户端无需重新安装，Service Worker 会自动更新。
+
+### 修复
+
+- **iOS Safari 刷新后歌单数据丢失**：根因是 iOS Safari 在存储压力或长时间未访问时会静默清空 IndexedDB。新增 **localStorage 自动备份机制**——每次歌曲/歌单增删改后自动同步到 localStorage（防抖 500ms），应用启动时若检测到 IndexedDB 为空则自动从 localStorage 恢复
+- ffmpeg 核心文件加载超时与 data URL 兜底（同 v1.0.4）
+- 提取按钮 busy 防抖锁（同 v1.0.4）
+
+## [1.0.4] - 2026-09-09
+
+> 本次更新仅改动应用代码（`.vue` / `.js`），用户端无需重新安装，Service Worker 会自动更新。
+
+### 修复
+
+- **ffmpeg 核心文件加载挂起10 分钟无响应**：根因是 Service Worker 拦截 WASM 文件请求后卡死，浏览器 fetch 既不 resolve 也不 reject。修复方案：
+  - 首次加载仍走 SW 预缓存路径（正常情况下秒级命中）
+  - 加载超时180 秒自动失败，不再无限挂起
+  - 超时后自动重试 3 次（指数退避 2s→4s→8s），重试时把 WASM 文件转为 **data URL 内联**，彻底绕过 Service Worker
+  - 提供友好中文提示，区分网络错误 / 超时 / 其它错误
+
+### 变更
+
+- 提取按钮增加 `busy` 防抖锁，提取期间完全禁止重复点击（修复多按钮堆叠）
+
 ## [1.0.3] - 2026-09-09
 
 > 本次更新仅改动应用代码（`.vue` / `.js`），用户端无需重新安装，Service Worker 会自动更新。
