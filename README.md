@@ -44,29 +44,73 @@ npm run dev
 
 ## 构建部署
 
+### 只 build 出静态文件
+
 ```bash
 npm run build   # 产物在 dist/，是纯静态文件
 ```
 
-`dist/` 可部署到任意静态托管（GitHub Pages、Cloudflare Pages、Vercel、Nginx 等）。部署后手机浏览器访问即可。
+`dist/` 可部署到任意静态托管（GitHub Pages、Cloudflare Pages、Vercel、Nginx 等）。
 
-## 在手机上使用（PWA）
+### 别人想用这个项目：两条路线
 
-本项目是 PWA（渐进式网页应用），部署到公网后：
+#### 路线 A：只想用，不想自己部署
+
+最简单——直接打开你已部署好的网址（例如 `https://<你的用户名>.github.io/music-loop/`），在浏览器里就能用，手机端「添加到主屏幕」后体验等同 App。**无需任何部署**。
+
+#### 路线 B：想自己 fork 一份部署
+
+**PC 端本地跑（开发 / 自用）**
+
+```bash
+git clone <他们 fork 后的仓库地址>
+cd music-loop
+npm install
+npm run dev        # 开发模式，浏览器打开终端显示的地址
+# 或
+npm run build && npm run preview   # 预览生产构建
+```
+
+**GitHub Pages 自动部署（推荐，免费）**
+
+仓库已内置 GitHub Actions 工作流（`.github/workflows/deploy.yml`），fork 后只需：
+
+1. 到自己仓库的 **Settings → Pages**
+2. **Source** 选 **GitHub Actions**
+3. 推一次 `main` 分支（或在 Actions 页手动触发一次 `Deploy to GitHub Pages`）
+4. 等 1~2 分钟，访问 `https://<他们的用户名>.github.io/<仓库名>/`
+
+工作流会自动处理子路径（通过 `BASE_URL` 注入），无需改任何配置。
+
+**其它静态托管（Vercel / Cloudflare Pages / Netlify / Nginx）**
+
+- 构建命令：`npm run build`
+- 输出目录：`dist`
+- 如果部署在**子路径**下（如 `example.com/music-loop/`），构建时需设置环境变量 `BASE_URL=/music-loop/`；部署在根域名则不用管
+
+### 手机端「部署」
+
+严格说手机端不需要部署——它只是访问一个网址：
 
 **iPhone（Safari）**
-1. 用 Safari 打开部署地址
+1. Safari 打开部署好的网址
 2. 点「分享」→「添加到主屏幕」
-3. 从主屏幕图标打开，就是全屏 App 体验
+3. 以后从主屏幕图标打开，就是全屏 App 体验（无浏览器地址栏）
 
 **Android（Chrome）**
-1. 用 Chrome 打开部署地址
+1. Chrome 打开网址
 2. 菜单 →「添加到主屏幕」/「安装应用」
 
-安装后的能力：
-- 🎵 锁屏/通知栏显示歌名，可直接控制播放、切歌（Media Session）
-- 📴 应用代码和 ffmpeg 核心已离线缓存，断网也能听歌
-- 🔒 锁屏后音乐继续播放（iOS 上自动连播偶尔会被系统挂起，点亮屏幕即恢复，属平台限制）
+### 部署后拿到新版本要不要重新安装？
+
+**不需要**。项目在 `vite.config.js` 里配置了 PWA `registerType: 'autoUpdate'`：
+
+- 你 push 代码到 GitHub → Actions 自动重新部署
+- 用户下次打开 App（或从后台切回前台），Service Worker 检测到新版本会**自动在后台下载并热更新**
+- 数据（歌曲、歌单）存在浏览器 IndexedDB 里，**更新不会丢数据**
+
+唯一需要注意：ffmpeg 核心文件约 32MB，首次更新后可能重新下载一次（视缓存策略），之后再离线可用。
+
 
 ## 注意
 

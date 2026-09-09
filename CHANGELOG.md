@@ -10,6 +10,10 @@
 - **底部播放器被 Home 指示条遮挡**：footer 增加 `env(safe-area-inset-bottom)` 内边距
 - **`apple-touch-icon` 子路径部署 404**：改为相对路径 `./icons/...`，修复 GitHub Pages 子路径部署下主屏幕图标不显示的问题
 
+### 文档
+
+- README 重写「构建部署」章节：区分「直接用」和「fork 自部署」两条路线，补充 PC 本地开发、GitHub Pages、其它静态托管、手机端安装、PWA 自动更新机制的说明
+
 ## [1.0.0] - 初始版本
 
 ### 新增
