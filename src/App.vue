@@ -27,7 +27,15 @@ const view = ref('library')
           <n-layout-header
             bordered
             class="app-header"
-            style="padding: 12px 24px; display: flex; align-items: center; gap: 24px"
+            style="
+              padding: 12px 24px;
+              padding-top: calc(12px + env(safe-area-inset-top, 0px));
+              padding-left: calc(24px + env(safe-area-inset-left, 0px));
+              padding-right: calc(24px + env(safe-area-inset-right, 0px));
+              display: flex;
+              align-items: center;
+              gap: 24px;
+            "
           >
             <span style="font-size: 18px; font-weight: 600; white-space: nowrap">
               🎵 Music Loop
@@ -51,7 +59,7 @@ const view = ref('library')
             <library-view v-show="view === 'library'" />
             <playlists-view v-show="view === 'playlists'" />
           </n-layout-content>
-          <n-layout-footer bordered>
+          <n-layout-footer bordered class="app-footer">
             <player-bar />
           </n-layout-footer>
         </n-layout>
@@ -65,10 +73,18 @@ const view = ref('library')
 @media (max-width: 640px) {
   .app-header {
     padding: 10px 12px !important;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-left: calc(12px + env(safe-area-inset-left, 0px)) !important;
+    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
     gap: 12px !important;
   }
   .app-content {
     padding: 12px !important;
   }
+}
+
+/* iOS 底部 Home 指示条安全区，避免遮挡播放器 */
+.app-footer {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 </style>
