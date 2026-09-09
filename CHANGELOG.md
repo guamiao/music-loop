@@ -2,6 +2,18 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.2] - 2026-09-09
+
+### 修复
+
+- **iOS 主屏幕 App 顶部按钮仍被灵动岛遮挡（v1.0.1 未完全解决）**：根因是 `black-translucent` 状态栏样式在部分 iOS 版本下 `env(safe-area-inset-top)` 返回 0。改为：
+  - `apple-mobile-web-app-status-bar-style` 由 `black-translucent` 改为 `default`，系统保留状态栏占位，内容不再顶到屏幕最上方
+  - CSS 变量 `--safe-top` 在 standalone 模式下使用 `max(env(safe-area-inset-top), 24px)` 兜底，即使环境变量失效也保留 24px 安全间距
+
+### 注意
+
+- 本修复**只对通过 Safari「添加到主屏幕」打开的 App 生效**；在 Safari 浏览器标签页中打开仍会看到系统 UI 遮挡（属 iOS 浏览器行为，无法通过网页代码规避）
+
 ## [1.0.1] - 2026-09-09
 
 ### 修复

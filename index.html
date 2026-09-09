@@ -8,7 +8,9 @@
     <!-- iOS 主屏幕 App 支持 -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- default：iOS 主屏幕 App 顶部保留状态栏占位，内容不会被灵动岛遮挡；
+         black-translucent 下 env(safe-area-inset-top) 在部分 iOS 版本返回 0，无法可靠避开刘海 -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Music Loop" />
     <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <title>Music Loop</title>

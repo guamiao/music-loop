@@ -29,9 +29,9 @@ const view = ref('library')
             class="app-header"
             style="
               padding: 12px 24px;
-              padding-top: calc(12px + env(safe-area-inset-top, 0px));
-              padding-left: calc(24px + env(safe-area-inset-left, 0px));
-              padding-right: calc(24px + env(safe-area-inset-right, 0px));
+              padding-top: calc(12px + var(--safe-top));
+              padding-left: calc(24px + var(--safe-left));
+              padding-right: calc(24px + var(--safe-right));
               display: flex;
               align-items: center;
               gap: 24px;
@@ -69,13 +69,29 @@ const view = ref('library')
 </template>
 
 <style>
+/* iOS 主屏幕 App 下部分版本 env(safe-area-inset-top) 返回 0，
+   给一个保底值确保按钮不被灵动岛遮挡；桌面端该变量为 0 时用 0 */
+:root {
+  --safe-top: max(env(safe-area-inset-top, 0px), 0px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+  --safe-left: max(env(safe-area-inset-left, 0px), 0px);
+  --safe-right: max(env(safe-area-inset-right, 0px), 0px);
+}
+/* 仅在 standalone（主屏幕 App）模式下加大顶部留白，
+   普通浏览器访问时保持原样 */
+@media all and (display-mode: standalone) {
+  :root {
+    --safe-top: max(env(safe-area-inset-top, 0px), 24px);
+  }
+}
+
 /* 窄屏（手机）适配：压缩头部和内容区的留白 */
 @media (max-width: 640px) {
   .app-header {
     padding: 10px 12px !important;
-    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
-    padding-left: calc(12px + env(safe-area-inset-left, 0px)) !important;
-    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+    padding-top: calc(10px + var(--safe-top)) !important;
+    padding-left: calc(12px + var(--safe-left)) !important;
+    padding-right: calc(12px + var(--safe-right)) !important;
     gap: 12px !important;
   }
   .app-content {
@@ -85,6 +101,6 @@ const view = ref('library')
 
 /* iOS 底部 Home 指示条安全区，避免遮挡播放器 */
 .app-footer {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: var(--safe-bottom);
 }
 </style>
