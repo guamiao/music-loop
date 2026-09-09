@@ -103,13 +103,37 @@ npm run build && npm run preview   # 预览生产构建
 
 ### 部署后拿到新版本要不要重新安装？
 
-**不需要**。项目在 `vite.config.js` 里配置了 PWA `registerType: 'autoUpdate'`：
+**一般不需要**。项目在 `vite.config.js` 里配置了 PWA `registerType: 'autoUpdate'`：
 
 - 你 push 代码到 GitHub → Actions 自动重新部署
 - 用户下次打开 App（或从后台切回前台），Service Worker 检测到新版本会**自动在后台下载并热更新**
 - 数据（歌曲、歌单）存在浏览器 IndexedDB 里，**更新不会丢数据**
 
 唯一需要注意：ffmpeg 核心文件约 32MB，首次更新后可能重新下载一次（视缓存策略），之后再离线可用。
+
+### 什么情况下手机端需要「重新安装」
+
+下面几类改动改的是 **`index.html` 里的 meta 标签 / PWA manifest**，已经安装在主屏幕的 App **不会**自动应用这些变化，需要用户在手机上重新走一遍「添加到主屏幕」流程：
+
+- 修改 `apple-mobile-web-app-*` 系列 meta（状态栏样式、标题、图标等）
+- 修改 `manifest.webmanifest` 中的应用名称、图标、`display`、`theme_color`、`start_url` 等
+- 修复主屏幕 App 的显示异常（典型例子：v1.0.2 修复灵动岛遮挡，就是改 `apple-mobile-web-app-status-bar-style`）
+
+**iPhone 重新安装步骤**：
+
+1. 长按主屏幕的 Music Loop 图标 → **移除 App**（歌曲数据在浏览器 IndexedDB 里，不会因为移除图标而丢失）
+2. 用 Safari 打开部署地址
+3. **上滑杀掉 Safari 后台**，再重新打开网址——确保加载的是最新 HTML（避免旧缓存）
+4. 点「分享」→「添加到主屏幕」
+5. 从新的主屏幕图标打开
+
+**Android 重新安装步骤**：
+
+1. 长按主屏幕图标 → 卸载 / 移除
+2. Chrome 打开部署地址，菜单 →「添加到主屏幕」/「安装应用」
+
+> 💡 **判断要不要重新安装的简便原则**：只改了 `.vue` / `.js` / `.css` 等应用代码 → 用户无需操作，自动更新；改了 `index.html` 的 meta 或 `vite.config.js` 里的 manifest → 需要提醒用户重新添加到主屏幕。维护者应在 CHANGELOG 里对这类改动明确标注「需要重新安装」。
+
 
 
 ## 注意
