@@ -32,9 +32,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // ffmpeg-core.wasm 约 32MB，需要调大缓存上限才能离线使用
-        maximumFileSizeToCacheInBytes: 40 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,svg,png,wasm}'],
+        globPatterns: ['**/*.{js,css,html,svg,png}'],
+        // 排除约 32MB 的 ffmpeg WASM 文件不纳入 SW 预缓存，
+        // 避免 SW 安装时下载该文件导致挂起（尤其在 iOS 上表现为提取卡死）
+        // WASM 文件由应用代码按需 fetch，浏览器磁盘缓存会自动加速后续加载
+        exclude: [/\.wasm$/],
       },
     }),
   ],

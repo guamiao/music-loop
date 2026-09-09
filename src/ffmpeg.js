@@ -6,43 +6,13 @@ import wasmURL from '@ffmpeg/core/wasm?url'
 let ffmpeg = null
 let loading = null
 
-const LOAD_TIMEOUT = 180000 // 180 秒超时，覆盖慢速网络下载 32MB WASM 文件的场景
-const MAX_RETRIES = 3
-
-function isNetworkError(err) {
-  const msg = err?.message || ''
-  return (
-    msg.includes('NetworkError') ||
-    msg.includes('network') ||
-    msg.includes('Failed to fetch') ||
-    err?.name === 'AbortError' ||
-    msg.includes('超时')
-  )
-}
-
-// 带超时的 fetch，防止 SW 卡死时无限挂起
-function fetchWithTimeout(url, timeoutMs) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  return fetch(url, { signal: controller.signal })
-    .finally(() => clearTimeout(timer))
-}
-
-// 将 URL 转为 data URL（base64 内联），绕过 Service Worker 缓存问题
-async function toDataURL(url) {
-  const resp = await fetchWithTimeout(url, 120000)
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} when loading ${url}`)
-  const buf = await resp.arrayBuffer()
-  const bytes = new Uint8Array(buf)
-  let binary = ''
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize))
-  }
-  const base64 = btoa(binary)
-  const ext = url.split('.').pop()?.split('?')[0] || ''
-  const mime = ext === 'wasm' ? 'application/wasm' : 'application/octet-stream'
-  return `data:${mime};base64,${base64}`
+// 主动绕过 Service Worker，直接从网络获取文件并转为 Blob URL
+// 解决 SW 预缓存 32MB WASM 文件时卡死导致整个加载挂起的问题
+async function fetchAsBlobURL(url) {
+  const resp = await fetch(url, { cache: 'no-store' })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
 }
 
 export function getFFmpeg() {
@@ -51,49 +21,27 @@ export function getFFmpeg() {
 
   const instance = new FFmpeg()
 
-  const doLoad = async (opts) => {
-    await Promise.race([
-      instance.load(opts),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('ffmpeg 加载超时，请检查网络后重试')), LOAD_TIMEOUT),
-      ),
-    ])
-  }
-
   loading = (async () => {
-    let lastErr
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // 绕过 SW：直接 fetch 文件，转为 Blob URL 再传给 load()
+      const [coreBlob, wasmBlob] = await Promise.all([
+        fetchAsBlobURL(coreURL),
+        fetchAsBlobURL(wasmURL),
+      ])
       try {
-        if (attempt > 0) {
-          console.warn(`ffmpeg 加载重试 (${attempt}/${MAX_RETRIES})…`)
-          // 重试时把文件内联为 data URL，绕过 SW 缓存
-          const [coreData, wasmData] = await Promise.all([
-            toDataURL(coreURL),
-            toDataURL(wasmURL),
-          ])
-          await doLoad({ coreURL: coreData, wasmURL: wasmData })
-        } else {
-          // 首次尝试正常 URL（走 SW 预缓存）
-          await doLoad({ coreURL, wasmURL })
-        }
-        ffmpeg = instance
-        return ffmpeg
-      } catch (err) {
-        lastErr = err
-        console.warn(`ffmpeg 加载失败 (attempt ${attempt + 1}):`, err?.message)
-        if (isNetworkError(err) && attempt < MAX_RETRIES) {
-          const delay = 2000 * Math.pow(2, attempt)
-          await new Promise((r) => setTimeout(r, delay))
-          continue
-        }
-        throw err
+        await instance.load({ coreURL: coreBlob, wasmURL: wasmBlob })
+      } finally {
+        // Blob URL 用完即释放（load 内部已读取完毕）
+        URL.revokeObjectURL(coreBlob)
+        URL.revokeObjectURL(wasmBlob)
       }
+      ffmpeg = instance
+      return ffmpeg
+    } catch (err) {
+      loading = null
+      throw err
     }
-    throw lastErr
-  })().catch((err) => {
-    loading = null
-    throw err
-  })
+  })()
 
   return loading
 }

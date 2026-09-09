@@ -2,6 +2,16 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.6] - 2026-09-09
+
+> 本次更新改动了 `vite.config.js`（SW 配置），用户端**无需重新安装**，刷新页面即可触发新 SW 激活。
+
+### 修复
+
+- **提取音频卡死10 分钟（根本修复）**：根因是 Service Worker 预缓存清单包含 32MB 的 ffmpeg WASM 文件，SW 安装时下载该文件导致安装流程挂起，阻塞了所有 fetch 请求。修复：将 `.wasm` 文件排除在 SW 预缓存之外，WASM 改为应用代码按需 fetch（浏览器磁盘缓存自动加速后续加载），SW 安装不再被大文件阻塞
+- 提取按钮增加 busy 防抖锁，提取期间禁止重复点击
+- ffmpeg.js 改用 Blob URL 加载，进一步避免 SW 对 WASM 请求的干扰
+
 ## [1.0.5] - 2026-09-09
 
 > 本次更新仅改动应用代码（`.vue` / `.js`），用户端无需重新安装，Service Worker 会自动更新。
