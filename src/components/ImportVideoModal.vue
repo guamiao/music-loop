@@ -171,28 +171,38 @@ function close() {
           :show-indicator="phase !== 'init'"
           :height="10"
         />
+        <!-- 忙碌态与空闲态使用两个独立节点（v-if/v-else），
+             避免 iOS Safari 在同一按钮反复切换文字/loading 时留下合成层残影（表现为按钮堆叠） -->
         <n-button
+          v-if="busy"
+          class="extract-btn"
           type="primary"
-          :loading="busy"
+          loading
+          disabled
+        >
+          {{
+            phase === 'download'
+              ? '准备中…'
+              : phase === 'init'
+                ? '启动引擎中…'
+                : '提取中…'
+          }}
+        </n-button>
+        <n-button
+          v-else
+          class="extract-btn"
+          type="primary"
           :disabled="!name.trim()"
           @click="doExtract"
         >
-          {{
-            busy
-              ? phase === 'download'
-                ? '准备中…'
-                : phase === 'init'
-                  ? '启动引擎中…'
-                  : '提取中…'
-              : '提取音频并存入音乐库'
-          }}
+          提取音频并存入音乐库
         </n-button>
         <n-text v-if="busy" depth="3" style="font-size: 12px">
           <template v-if="phase === 'download'">
-            首次使用需下载音频引擎（约 32MB），正在下载 {{ progress }}%，下载后会缓存，之后无需再等待…
+            首次使用需下载音频引擎（约 32MB），正在下载 {{ progress }}%；采用分块下载，网络波动会自动续传，请尽量保持页面在前台…
           </template>
           <template v-else-if="phase === 'init'">
-            引擎已下载完成，正在手机本地启动（手机上通常需要几秒到几十秒），请保持页面在前台，不要锁屏或切走…
+            引擎已下载完成，正在手机本地启动（通常几秒到几十秒），请保持页面在前台、不要锁屏或切走…
           </template>
           <template v-else>
             正在提取音频 {{ progress }}%，请耐心等待…
@@ -202,3 +212,11 @@ function close() {
     </n-space>
   </n-modal>
 </template>
+
+<style scoped>
+/* 强制按钮独立合成层，规避 iOS WebKit 按钮状态切换后的重绘残影 */
+.extract-btn {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+}
+</style>
