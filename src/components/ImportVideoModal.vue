@@ -27,6 +27,8 @@ const range = ref([0, 0])
 const name = ref('')
 const busy = ref(false)       // 防抖：整个提取流程期间锁定按钮
 const progress = ref(0)
+// 当前阶段：download = 首次下载 ffmpeg 核心（约 32MB），extract = 正在提取音频
+const phase = ref('extract')
 
 function pick() {
   fileInput.value.click()
@@ -50,14 +52,22 @@ function onLoaded() {
 async function doExtract() {
   if (busy.value) return
   busy.value = true
+  phase.value = 'extract'
   progress.value = 0
   try {
     const blob = await extractAudio(
       videoFile.value,
       range.value[0],
       range.value[1],
-      (p) => {
-        progress.value = Math.round(p * 100)
+      {
+        onDownloadProgress: (p) => {
+          phase.value = 'download'
+          progress.value = Math.round(p * 100)
+        },
+        onProgress: (p) => {
+          phase.value = 'extract'
+          progress.value = Math.round(p * 100)
+        },
       },
     )
     const audioDuration = await readMediaDuration(blob)
@@ -155,10 +165,15 @@ function close() {
           :disabled="!name.trim()"
           @click="doExtract"
         >
-          {{ busy ? '提取中…' : '提取音频并存入音乐库' }}
+          {{ busy ? (phase === 'download' ? '准备中…' : '提取中…') : '提取音频并存入音乐库' }}
         </n-button>
         <n-text v-if="busy" depth="3" style="font-size: 12px">
-          正在加载 ffmpeg 核心文件并提取音频，请耐心等待…
+          <template v-if="phase === 'download'">
+            首次使用需下载音频引擎（约 32MB），正在下载 {{ progress }}%，下载后会缓存，之后无需再等待…
+          </template>
+          <template v-else>
+            正在提取音频 {{ progress }}%，请耐心等待…
+          </template>
         </n-text>
       </template>
     </n-space>

@@ -2,7 +2,21 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.0.7] - 2026-09-10
+
+> 本次更新改动了 `vite.config.js`（SW 配置），用户端**无需重新安装**，刷新页面即可触发新 SW 激活。
+
+### 修复
+
+- **提取音频一直卡在"提取中"（真正修复并成功上线）**：排查发现 v1.0.6 的修复虽然已提交，但 CI 构建实际**失败未部署**——原因是 `workbox.exclude` 不是 workbox-build 7 GenerateSW 模式的合法配置项（报 `WorkboxConfigError`），线上一直运行的是会把 32MB WASM 纳入 SW 预缓存的旧版本。本次：
+  - 删除非法的 `exclude` 配置，改用合法的 `runtimeCaching`：WASM 不进预缓存（SW 安装秒完成），首次提取时由 SW 以 CacheFirst 方式运行时缓存，之后秒开且可离线
+  - ffmpeg 核心文件改为主线程流式下载并转 Blob URL，绕过异常的旧 SW；下载有**实时进度**（首次约 32MB，界面显示百分比），连续 60 秒无数据自动中止并报错，不再无限挂起
+  - WASM 实例化增加 90 秒兜底超时；任何失败都会弹出明确的中文错误提示，不会再出现永远转圈的"提取中"
+  - 提取界面区分"准备中（下载引擎）/ 提取中（转码）"两个阶段
+
 ## [1.0.6] - 2026-09-09
+
+> ⚠️ 此版本因 `vite.config.js` 使用了 workbox GenerateSW 不支持的 `exclude` 选项，CI 构建失败，**未实际部署**，已由 v1.0.7 取代。
 
 > 本次更新改动了 `vite.config.js`（SW 配置），用户端**无需重新安装**，刷新页面即可触发新 SW 激活。
 
