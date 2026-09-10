@@ -75,10 +75,12 @@ async function loadWithTimeout(instance, opts) {
   }
 }
 
-export function getFFmpeg(onDownloadProgress) {
+// callbacks: { onDownloadProgress(0~1), onStage('init'|'extract'), onProgress(0~1) }
+export function getFFmpeg(callbacks = {}) {
   if (ffmpeg) return Promise.resolve(ffmpeg)
   if (loading) return loading
 
+  const { onDownloadProgress, onStage } = callbacks
   const instance = new FFmpeg()
 
   loading = (async () => {
@@ -88,6 +90,8 @@ export function getFFmpeg(onDownloadProgress) {
         fetchAsBlobURL(coreURL, 'text/javascript'),
         fetchAsBlobURL(wasmURL, 'application/wasm', onDownloadProgress),
       ])
+      // 下载完成 → 本地实例化 WASM（手机上可能需要数秒至数十秒）
+      onStage?.('init')
       try {
         await loadWithTimeout(instance, { coreURL: coreBlob, wasmURL: wasmBlob })
       } finally {
@@ -107,10 +111,10 @@ export function getFFmpeg(onDownloadProgress) {
 }
 
 // 从视频文件中截取 [start, end] 秒区间，提取为 MP3
-// callbacks: { onDownloadProgress(0~1), onProgress(0~1 转码进度) }
+// callbacks: { onDownloadProgress(0~1), onStage('init'|'extract'), onProgress(0~1 转码进度) }
 export async function extractAudio(videoFile, start, end, callbacks = {}) {
-  const { onDownloadProgress, onProgress } = callbacks
-  const ff = await getFFmpeg(onDownloadProgress)
+  const { onDownloadProgress, onStage, onProgress } = callbacks
+  const ff = await getFFmpeg({ onDownloadProgress, onStage })
   const ext = videoFile.name.match(/\.\w+$/)?.[0] || '.mp4'
   const input = `input${ext}`
   const progressHandler = ({ progress }) => {
@@ -118,6 +122,8 @@ export async function extractAudio(videoFile, start, end, callbacks = {}) {
   }
   ff.on('progress', progressHandler)
   try {
+    // 引擎就绪，进入转码阶段
+    onStage?.('extract')
     await ff.writeFile(input, await fetchFile(videoFile))
     await ff.exec([
       '-ss', start.toFixed(2),

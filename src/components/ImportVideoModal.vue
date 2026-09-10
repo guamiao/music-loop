@@ -27,7 +27,7 @@ const range = ref([0, 0])
 const name = ref('')
 const busy = ref(false)       // 防抖：整个提取流程期间锁定按钮
 const progress = ref(0)
-// 当前阶段：download = 首次下载 ffmpeg 核心（约 32MB），extract = 正在提取音频
+// 当前阶段：download = 首次下载引擎（约 32MB），init = 本地启动引擎，extract = 正在转码提取
 const phase = ref('extract')
 
 function pick() {
@@ -63,6 +63,11 @@ async function doExtract() {
         onDownloadProgress: (p) => {
           phase.value = 'download'
           progress.value = Math.round(p * 100)
+        },
+        onStage: (s) => {
+          phase.value = s
+          if (s === 'init') progress.value = 100
+          if (s === 'extract') progress.value = 0
         },
         onProgress: (p) => {
           phase.value = 'extract'
@@ -158,18 +163,36 @@ function close() {
           placeholder="给这段音频起个名字"
           :disabled="busy"
         />
-        <n-progress v-if="busy" type="line" :percentage="progress" />
+        <n-progress
+          v-if="busy"
+          type="line"
+          :percentage="progress"
+          :processing="phase === 'init'"
+          :show-indicator="phase !== 'init'"
+          :height="10"
+        />
         <n-button
           type="primary"
           :loading="busy"
           :disabled="!name.trim()"
           @click="doExtract"
         >
-          {{ busy ? (phase === 'download' ? '准备中…' : '提取中…') : '提取音频并存入音乐库' }}
+          {{
+            busy
+              ? phase === 'download'
+                ? '准备中…'
+                : phase === 'init'
+                  ? '启动引擎中…'
+                  : '提取中…'
+              : '提取音频并存入音乐库'
+          }}
         </n-button>
         <n-text v-if="busy" depth="3" style="font-size: 12px">
           <template v-if="phase === 'download'">
             首次使用需下载音频引擎（约 32MB），正在下载 {{ progress }}%，下载后会缓存，之后无需再等待…
+          </template>
+          <template v-else-if="phase === 'init'">
+            引擎已下载完成，正在手机本地启动（手机上通常需要几秒到几十秒），请保持页面在前台，不要锁屏或切走…
           </template>
           <template v-else>
             正在提取音频 {{ progress }}%，请耐心等待…
