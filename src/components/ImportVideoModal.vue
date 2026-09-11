@@ -27,7 +27,8 @@ const range = ref([0, 0])
 const name = ref('')
 const busy = ref(false)       // 防抖：整个提取流程期间锁定按钮
 const progress = ref(0)
-// 当前阶段：download = 首次下载引擎（约 32MB），init = 本地启动引擎，extract = 正在转码提取
+// 当前阶段：waiting = 等待下载节点响应（冷启动），download = 下载引擎，
+// init = 本地启动引擎，extract = 正在转码提取
 const phase = ref('extract')
 
 function pick() {
@@ -63,6 +64,11 @@ async function doExtract() {
         onDownloadProgress: (p) => {
           phase.value = 'download'
           progress.value = Math.round(p * 100)
+        },
+        onWaiting: () => {
+          // CDN 节点冷启动回源中（响应头已到、首字节未到）
+          if (phase.value !== 'download') phase.value = 'waiting'
+          progress.value = 0
         },
         onStage: (s) => {
           phase.value = s
@@ -167,8 +173,8 @@ function close() {
           v-if="busy"
           type="line"
           :percentage="progress"
-          :processing="phase === 'init'"
-          :show-indicator="phase !== 'init'"
+          :processing="phase === 'init' || phase === 'waiting'"
+          :show-indicator="phase !== 'init' && phase !== 'waiting'"
           :height="10"
         />
         <!-- 忙碌态与空闲态使用两个独立节点（v-if/v-else），
@@ -181,11 +187,13 @@ function close() {
           disabled
         >
           {{
-            phase === 'download'
-              ? '准备中…'
-              : phase === 'init'
-                ? '启动引擎中…'
-                : '提取中…'
+            phase === 'waiting'
+              ? '连接中…'
+              : phase === 'download'
+                ? '准备中…'
+                : phase === 'init'
+                  ? '启动引擎中…'
+                  : '提取中…'
           }}
         </n-button>
         <n-button
@@ -198,8 +206,11 @@ function close() {
           提取音频并存入音乐库
         </n-button>
         <n-text v-if="busy" depth="3" style="font-size: 12px">
-          <template v-if="phase === 'download'">
-            首次使用需下载音频引擎（约 32MB），正在下载 {{ progress }}%；采用分块下载，网络波动会自动续传，请尽量保持页面在前台…
+          <template v-if="phase === 'waiting'">
+            正在连接国内下载节点，首次访问可能需要几十秒唤醒节点缓存，请保持页面在前台稍候…
+          </template>
+          <template v-else-if="phase === 'download'">
+            正在下载音频引擎（约 32MB）{{ progress }}%，网络波动会自动断点续传，下载一次后永久缓存…
           </template>
           <template v-else-if="phase === 'init'">
             引擎已下载完成，正在手机本地启动（通常几秒到几十秒），请保持页面在前台、不要锁屏或切走…

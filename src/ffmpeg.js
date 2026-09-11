@@ -1,6 +1,6 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
-// 核心文件从 node_modules 打包进来，不依赖任何 CDN
+// 同源兜底地址（Vite 打包产物）；默认优先走下方国内 CDN
 import coreURL from '@ffmpeg/core?url'
 import wasmURL from '@ffmpeg/core/wasm?url'
 
@@ -8,11 +8,28 @@ let ffmpeg = null
 let loading = null
 
 // ---------- 常量 ----------
-const WASM_CACHE = 'ffmpeg-wasm' // 必须与 vite.config.js 中 runtimeCaching 的 cacheName 一致
-const CHUNK_SIZE = 2 * 1024 * 1024 // 分块下载：每块 2MB
-const CHUNK_TIMEOUT_MS = 60000 // 单块下载超时
-const CHUNK_MAX_RETRY = 8 // 单块最多重试次数（仅重试这一块，不重头下载）
-const STALL_TIMEOUT_MS = 120000 // 不支持 Range 时整文件流式下载的无数据超时
+const WASM_CACHE = 'ffmpeg-wasm' // 应用自管的 Cache Storage 名称
+// 升级 @ffmpeg/core 依赖时需同步修改此版本号
+const FFMPEG_CORE_VERSION = '0.12.10'
+// 国内 CDN（npmmirror / 阿里）：手机访问 GitHub Pages 跨国下载 32MB 很慢且易断流，
+// 实测国内节点速度很快，且 CORS 开放、支持 Range。作为首选源，
+// 同源（GitHub Pages 打包文件）作为兜底源。
+const MIRROR_BASE = `https://registry.npmmirror.com/@ffmpeg/core/${FFMPEG_CORE_VERSION}/files/dist/esm`
+// 各资源的候选下载源（按顺序尝试，前一个失败才用下一个）
+const SOURCES = {
+  core: [`${MIRROR_BASE}/ffmpeg-core.js`, coreURL],
+  wasm: [`${MIRROR_BASE}/ffmpeg-core.wasm`, wasmURL],
+}
+// 与下载源无关的固定缓存键：换源/版本 URL 变化后仍能命中已下载的引擎
+const CACHE_KEYS = {
+  core: `ffmpeg-assets/${FFMPEG_CORE_VERSION}/ffmpeg-core.js`,
+  wasm: `ffmpeg-assets/${FFMPEG_CORE_VERSION}/ffmpeg-core.wasm`,
+}
+const CONNECT_TIMEOUT_MS = 20000 // 等待响应头
+const FIRST_STALL_MS = 120000 // 首字节宽限：CDN 冷节点回源可能要几十秒
+const STALL_TIMEOUT_MS = 30000 // 已开始接收后，两块数据之间最长间隔
+const RESUME_MAX_RETRY = 5 // 中途断流后的断点续传次数
+const WAIT_HINT_MS = 3000 // 多久没收到首字节就提示“节点冷启动中”
 // 引擎实例化的“前台累计”超时（iOS 切后台时 JS 暂停，不能用墙上时间计时）
 const INIT_FOREGROUND_TIMEOUT_MS = 120000
 
@@ -20,15 +37,11 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// ---------- 下载 ----------
+// ---------- 缓存 ----------
 
-/**
- * 优先从 Cache Storage 读取（SW 的 CacheFirst 与页面共享缓存）。
- * 命中说明之前已下载过，直接秒回，完全离线可用。
- */
-async function matchCache(url) {
+async function matchCache(cacheKey) {
   try {
-    const cached = await caches.match(url, { ignoreSearch: true })
+    const cached = await caches.match(cacheKey, { cacheName: WASM_CACHE })
     if (cached && cached.ok) return await cached.blob()
   } catch {
     /* caches 不可用时忽略 */
@@ -36,151 +49,185 @@ async function matchCache(url) {
   return null
 }
 
-async function putCache(url, blob, mimeType) {
+async function putCache(cacheKey, blob, mimeType) {
   try {
     const cache = await caches.open(WASM_CACHE)
-    await cache.put(
-      url,
-      new Response(blob, { headers: { 'content-type': mimeType } }),
-    )
+    await cache.put(cacheKey, new Response(blob, { headers: { 'content-type': mimeType } }))
   } catch {
     /* 缓存写入失败不影响主流程 */
   }
 }
 
-// 带超时的单块 Range 请求
-function fetchRange(url, start, end) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), CHUNK_TIMEOUT_MS)
-  return fetch(url, {
-    headers: { Range: `bytes=${start}-${end}` },
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timer))
-}
+// ---------- 下载 ----------
 
-/**
- * 下载文件为 Blob：
- * 1. 先查缓存（之前成功下载过则秒回）；
- * 2. 探测服务器是否支持 Range（GitHub Pages 支持，返回 206），支持则分块下载，
- *    单块失败仅重试该块——手机弱网下不会因为一次停滞就重下整个 32MB；
- * 3. 不支持 Range 则退化为整文件流式下载（带无数据超时）；
- * 4. 成功后写入 Cache Storage，之后由 SW CacheFirst 直接命中。
- */
-async function downloadBlob(url, mimeType, onProgress) {
-  const hit = await matchCache(url)
+// 同一资源的在途下载去重：应用启动后的静默预热与用户点击提取共享一次下载
+const inflight = new Map()
+
+async function downloadBlob(sources, cacheKey, mimeType, onProgress, onWaiting) {
+  const hit = await matchCache(cacheKey)
   if (hit) {
     onProgress?.(1)
     return hit
   }
-
-  // 探测 Range 支持
-  let supportsRange = false
-  let total = 0
-  try {
-    const probe = await fetch(url, {
-      headers: { Range: 'bytes=0-0' },
-      cache: 'no-store',
-    })
-    supportsRange = probe.status === 206
-    const cr = probe.headers.get('content-range') // bytes 0-0/32232419
-    if (cr) total = Number(cr.split('/')[1]) || 0
-    // 探测响应（1 字节）主动释放，正文走分块请求
-    probe.body?.cancel?.()
-  } catch {
-    supportsRange = false
+  if (inflight.has(cacheKey)) {
+    const job = inflight.get(cacheKey)
+    if (onProgress) job.subs.add(onProgress)
+    try {
+      return await job.promise
+    } finally {
+      if (onProgress) job.subs.delete(onProgress)
+    }
   }
 
-  let blob
-  if (supportsRange && total > 0) {
-    blob = await downloadInChunks(url, total, onProgress)
-  } else {
-    blob = await downloadStream(url, onProgress)
-  }
-  await putCache(url, blob, mimeType)
-  return blob
-}
-
-async function downloadInChunks(url, total, onProgress) {
-  const chunks = []
-  for (let start = 0; start < total; start += CHUNK_SIZE) {
-    const end = Math.min(start + CHUNK_SIZE - 1, total - 1)
-    let chunk
-    // eslint-disable-next-line no-constant-condition
-    for (let attempt = 0; ; attempt++) {
+  const subs = new Set()
+  if (onProgress) subs.add(onProgress)
+  const emit = (p) => subs.forEach((fn) => fn?.(p))
+  const job = (async () => {
+    let lastErr
+    for (const url of sources) {
       try {
-        const resp = await fetchRange(url, start, end)
-        if (resp.status !== 206 && resp.status !== 200) {
-          throw new Error(`HTTP ${resp.status}`)
-        }
-        chunk = new Uint8Array(await resp.arrayBuffer())
-        // 个别服务器会忽略 Range 返回全文，这种情况下直接用整包
-        if (resp.status === 200) {
-          onProgress?.(1)
-          return new Blob([chunk])
-        }
-        break
+        const blob = await downloadFromSource(url, mimeType, emit, onWaiting)
+        await putCache(cacheKey, blob, mimeType)
+        return blob
       } catch (err) {
-        if (attempt >= CHUNK_MAX_RETRY) {
-          throw new Error(
-            '网络不稳定，引擎下载中断（每个分块已自动重试多次仍失败），请换到更稳定的 Wi-Fi 后重试',
-          )
-        }
-        // 指数退避：1s,2s,4s,8s…（封顶 8s）
-        await sleep(Math.min(1000 * 2 ** attempt, 8000))
+        lastErr = err
+        console.warn(`[ffmpeg] 下载源失败，尝试下一个：${url}`, err?.message || err)
       }
     }
-    chunks.push(chunk)
-    onProgress?.(Math.min(1, (end + 1) / total))
+    throw (
+      lastErr ||
+      new Error('音频引擎下载失败：所有下载源均不可用，请检查网络后重试')
+    )
+  })()
+  inflight.set(cacheKey, { promise: job, subs })
+  try {
+    return await job
+  } finally {
+    inflight.delete(cacheKey)
   }
-  return new Blob(chunks, { type: 'application/octet-stream' })
 }
 
-// 退化路径：整文件流式下载，连续 STALL_TIMEOUT_MS 收不到数据才中止
-async function downloadStream(url, onProgress) {
+// 等待响应头阶段超时中止
+function fetchWithTimeout(url, timeoutMs, init = {}) {
   const controller = new AbortController()
-  let stallTimer
-  const arm = () => {
-    clearTimeout(stallTimer)
-    stallTimer = setTimeout(() => controller.abort(), STALL_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...init, signal: controller.signal }).finally(() =>
+    clearTimeout(timer),
+  )
+}
+
+/**
+ * 单次（可带 Range 的）流式下载。
+ * 冷节点回源时响应头很快但首字节要等较久，故首字节与后续数据用不同宽限：
+ * - 首字节：FIRST_STALL_MS；开始接收后两块间隔：STALL_TIMEOUT_MS；
+ * - start>0 时用 Range 从断点续传；
+ * - onWaiting：等待首字节超过 WAIT_HINT_MS 时给出一次提示。
+ * 返回已收到的分片、字节数与总大小，由调用方判断是否完整。
+ */
+async function streamOnce(url, { start = 0, onWaiting, onProgress }) {
+  // 首次（start=0）要容忍冷节点长达数十秒的回源；断点续传时节点已暖，用短超时
+  const connectTimeout = start === 0 ? FIRST_STALL_MS : CONNECT_TIMEOUT_MS
+  const headers = start > 0 ? { Range: `bytes=${start}-` } : undefined
+  const resp = await fetchWithTimeout(url, connectTimeout, { headers })
+  if (resp.status !== 200 && resp.status !== 206) {
+    throw new Error(`HTTP ${resp.status}`)
   }
+  const isPartial = resp.status === 206
+  let total = 0
+  if (isPartial) {
+    const cr = resp.headers.get('content-range') // bytes start-end/total
+    if (cr) total = Number(cr.split('/')[1]) || 0
+  } else {
+    total = Number(resp.headers.get('content-length')) || 0
+  }
+
+  if (!resp.body) {
+    const buf = new Uint8Array(await resp.arrayBuffer())
+    onProgress?.(1)
+    return { chunks: [buf], received: buf.length, total }
+  }
+
+  const reader = resp.body.getReader()
+  const chunks = []
+  let received = 0
+  let gotFirst = false
+  let stallTimer
+  let timedOut = false
+  const armStall = (ms) => {
+    clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => {
+      timedOut = true
+      reader.cancel()
+    }, ms)
+  }
+  const waitTimer = setTimeout(() => {
+    if (!gotFirst) onWaiting?.()
+  }, WAIT_HINT_MS)
+  // 首字节宽限更长（冷节点回源），收到第一块后切换为正常断流宽限
+  armStall(FIRST_STALL_MS)
   try {
-    arm()
-    const resp = await fetch(url, { signal: controller.signal })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const len = Number(resp.headers.get('content-length')) || 0
-    if (!resp.body || !len) {
-      const b = await resp.blob()
-      onProgress?.(1)
-      return b
-    }
-    const reader = resp.body.getReader()
-    const chunks = []
-    let loaded = 0
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
+      if (!gotFirst) {
+        gotFirst = true
+        clearTimeout(waitTimer)
+        armStall(STALL_TIMEOUT_MS)
+      }
       chunks.push(value)
-      loaded += value.length
-      arm()
-      onProgress?.(Math.min(1, loaded / len))
+      received += value.length
+      if (total) onProgress?.(Math.min(1, (start + received) / total))
     }
-    return new Blob(chunks)
-  } catch (err) {
-    if (err?.name === 'AbortError') {
-      throw new Error('引擎下载中断（长时间无数据传输），请检查网络后重试')
-    }
-    throw err
   } finally {
+    clearTimeout(waitTimer)
     clearTimeout(stallTimer)
   }
+  // 断流不抛错：把已收到的分片带回，由调用方用 Range 从断点续传，避免丢弃已下载部分
+  return { chunks, received, total, stalled: timedOut }
 }
 
-async function fetchAsBlobURL(url, mimeType, onProgress) {
-  const blob = await downloadBlob(
-    url,
-    mimeType,
-    mimeType === 'application/wasm' ? onProgress : undefined,
-  )
+/**
+ * 整包流式优先 + 断点续传：
+ * 冷节点对“每个不同的 Range URL”都可能单独回源，故不预先分块；
+ * 先整包 GET（单一缓存键，边缘只需回源一次）。
+ * - 若已收到部分数据后断流：用 Range 从断点续传（此刻边缘通常已暖）；
+ * - 若连首字节都没等到（冷节点回源过久）：直接失败交给 downloadBlob 换下一个源，
+ *   不在同一个冷节点上死等。
+ */
+async function resumeDownload(url, mimeType, onProgress, onWaiting) {
+  const allChunks = []
+  let start = 0
+  let total = 0
+  let waitingEmitted = false // 避免续传时重复触发 onWaiting
+  for (let attempt = 0; attempt <= RESUME_MAX_RETRY; attempt++) {
+    const r = await streamOnce(url, {
+      start,
+      onWaiting: waitingEmitted ? undefined : onWaiting,
+      onProgress,
+    })
+    waitingEmitted = true
+    allChunks.push(...r.chunks)
+    total = r.total || total
+    start += r.received
+    if (!total || start >= total) {
+      return new Blob(allChunks, { type: mimeType })
+    }
+    if (r.stalled && start === 0) {
+      // 一个字节都没收到：换源，而不是在冷节点上反复重试
+      throw new Error('下载节点长时间无响应，切换备用下载源')
+    }
+    // 已收到部分数据后断流：稍候，用 Range 断点续传
+    await sleep(800)
+  }
+  throw new Error('网络不稳定，引擎多次断点续传仍未完成，请换到更稳定的 Wi-Fi 后重试')
+}
+
+async function downloadFromSource(url, mimeType, onProgress, onWaiting) {
+  return resumeDownload(url, mimeType, onProgress, onWaiting)
+}
+
+async function fetchAsBlobURL(sources, cacheKey, mimeType, onProgress, onWaiting) {
+  const blob = await downloadBlob(sources, cacheKey, mimeType, onProgress, onWaiting)
   return URL.createObjectURL(
     mimeType ? new Blob([blob], { type: mimeType }) : blob,
   )
@@ -232,7 +279,7 @@ function guardInit(loadPromise) {
   })
 }
 
-async function initFFmpeg(coreBlob, wasmBlob, onStage) {
+async function initFFmpeg(coreBlobUrl, wasmBlobUrl, onStage) {
   let instance = new FFmpeg()
   let lastErr
   // 最多两轮：首轮 + 经历后台挂起后的重启轮
@@ -247,7 +294,7 @@ async function initFFmpeg(coreBlob, wasmBlob, onStage) {
       onStage?.('init')
     }
     try {
-      await guardInit(instance.load({ coreURL: coreBlob, wasmURL: wasmBlob }))
+      await guardInit(instance.load({ coreURL: coreBlobUrl, wasmURL: wasmBlobUrl }))
       return instance
     } catch (err) {
       lastErr = err
@@ -258,44 +305,79 @@ async function initFFmpeg(coreBlob, wasmBlob, onStage) {
   throw lastErr
 }
 
-// callbacks: { onDownloadProgress(0~1), onStage('init'|'extract'), onProgress(0~1) }
+// 引擎加载的订阅者集合（预热与正式提取可能同时存在）+ 当前快照，供后加入者回放
+const loadSubs = new Set()
+let loadSnapshot = { stage: null, progress: 0 }
+function emitLoad(event) {
+  if (event.stage) loadSnapshot = { ...loadSnapshot, stage: event.stage }
+  if (typeof event.progress === 'number') {
+    loadSnapshot = { ...loadSnapshot, progress: event.progress }
+  }
+  for (const cb of loadSubs) cb(event)
+}
+
+// callbacks: { onDownloadProgress(0~1), onWaiting(), onStage('init'|'extract') }
 export function getFFmpeg(callbacks = {}) {
   if (ffmpeg) return Promise.resolve(ffmpeg)
-  if (loading) return loading
 
-  const { onDownloadProgress, onStage } = callbacks
-
-  loading = (async () => {
-    let coreBlobUrl
-    let wasmBlobUrl
-    try {
-      // core 仅约 110KB；进度由 32MB 的 wasm 主导
-      ;[coreBlobUrl, wasmBlobUrl] = await Promise.all([
-        fetchAsBlobURL(coreURL, 'text/javascript'),
-        fetchAsBlobURL(wasmURL, 'application/wasm', onDownloadProgress),
-      ])
-      // 下载完成 → 本地实例化 WASM（手机上可能需要数秒至数十秒）
-      onStage?.('init')
-      ffmpeg = await initFFmpeg(coreBlobUrl, wasmBlobUrl, onStage)
-      return ffmpeg
-    } catch (err) {
-      loading = null
-      throw err
-    } finally {
-      // load 内部读取完毕后即可释放 Blob URL
-      if (coreBlobUrl) URL.revokeObjectURL(coreBlobUrl)
-      if (wasmBlobUrl) URL.revokeObjectURL(wasmBlobUrl)
+  const { onDownloadProgress, onWaiting, onStage } = callbacks
+  // 订阅在途加载：立即回放当前快照（预热可能已在下载/初始化中）
+  let sub
+  if (onDownloadProgress || onStage) {
+    sub = (e) => {
+      if (e.stage) onStage?.(e.stage)
+      if (typeof e.progress === 'number') onDownloadProgress?.(e.progress)
     }
-  })()
+    loadSubs.add(sub)
+    if (loadSnapshot.stage === 'init') onStage?.('init')
+    else if (loadSnapshot.stage === 'download') {
+      onStage?.('download')
+      onDownloadProgress?.(loadSnapshot.progress)
+    }
+  }
 
-  return loading
+  if (!loading) {
+    loading = (async () => {
+      let coreBlobUrl
+      let wasmBlobUrl
+      try {
+        // core 仅约 110KB；进度由 32MB 的 wasm 主导
+        // 两个文件分别按“国内 CDN → 同源兜底”的顺序下载
+        ;[coreBlobUrl, wasmBlobUrl] = await Promise.all([
+          fetchAsBlobURL(SOURCES.core, CACHE_KEYS.core, 'text/javascript'),
+          fetchAsBlobURL(
+            SOURCES.wasm,
+            CACHE_KEYS.wasm,
+            'application/wasm',
+            (p) => emitLoad({ stage: 'download', progress: p }),
+            () => emitLoad({ stage: 'waiting' }),
+          ),
+        ])
+        // 下载完成 → 本地实例化 WASM（手机上可能需要数秒至数十秒）
+        emitLoad({ stage: 'init' })
+        ffmpeg = await initFFmpeg(coreBlobUrl, wasmBlobUrl, () =>
+          emitLoad({ stage: 'init' }),
+        )
+        return ffmpeg
+      } catch (err) {
+        loading = null
+        loadSnapshot = { stage: null, progress: 0 }
+        throw err
+      } finally {
+        if (coreBlobUrl) URL.revokeObjectURL(coreBlobUrl)
+        if (wasmBlobUrl) URL.revokeObjectURL(wasmBlobUrl)
+      }
+    })()
+  }
+
+  return loading.finally(() => sub && loadSubs.delete(sub))
 }
 
 // 从视频文件中截取 [start, end] 秒区间，提取为 MP3
-// callbacks: { onDownloadProgress, onStage('init'|'extract'), onProgress(转码 0~1) }
+// callbacks: { onDownloadProgress, onWaiting, onStage('init'|'extract'), onProgress(转码 0~1) }
 export async function extractAudio(videoFile, start, end, callbacks = {}) {
-  const { onDownloadProgress, onStage, onProgress } = callbacks
-  const ff = await getFFmpeg({ onDownloadProgress, onStage })
+  const { onDownloadProgress, onWaiting, onStage, onProgress } = callbacks
+  const ff = await getFFmpeg({ onDownloadProgress, onWaiting, onStage })
   const ext = videoFile.name.match(/\.\w+$/)?.[0] || '.mp4'
   const input = `input${ext}`
   const progressHandler = ({ progress }) => {
@@ -321,5 +403,24 @@ export async function extractAudio(videoFile, start, end, callbacks = {}) {
     return new Blob([data], { type: 'audio/mpeg' })
   } finally {
     ff.off('progress', progressHandler)
+  }
+}
+
+/**
+ * 应用启动后在浏览器空闲时静默下载并初始化引擎：
+ * 用户打开本工具几乎必然要提取音频，提前在后台完成 32MB 下载与本地实例化，
+ * 等其点「提取」时通常已直接就绪。预热失败静默忽略，正式提取时仍会重试。
+ */
+export function prewarmFFmpeg() {
+  if (document.hidden) return
+  // 省流模式下不主动下载
+  if (navigator.connection?.saveData) return
+  const run = () => {
+    getFFmpeg({}).catch(() => {})
+  }
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(run, { timeout: 3000 })
+  } else {
+    setTimeout(run, 1000)
   }
 }

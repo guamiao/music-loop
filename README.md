@@ -39,7 +39,7 @@ npm run dev
 |---|---|
 | 框架 | Vue 3 + Vite |
 | UI | Naive UI |
-| 音视频处理 | ffmpeg.wasm（核心文件本地打包，无需联网加载） |
+| 音视频处理 | ffmpeg.wasm（引擎 32MB，优先从国内 npmmirror CDN 下载、GitHub Pages 兜底，下载后本地缓存可离线） |
 | 本地存储 | IndexedDB（Dexie.js） |
 
 ## 构建部署
@@ -109,7 +109,7 @@ npm run build && npm run preview   # 预览生产构建
 - 用户下次打开 App（或从后台切回前台），Service Worker 检测到新版本会**自动在后台下载并热更新**
 - 数据（歌曲、歌单）存在浏览器 IndexedDB 里，**更新不会丢数据**
 
-唯一需要注意：ffmpeg 核心文件约 32MB，首次更新后可能重新下载一次（视缓存策略），之后再离线可用。
+ffmpeg 引擎约 32MB，仅**首次提取**时下载（优先走国内 CDN），之后缓存在本地、可离线使用；只有升级 ffmpeg 引擎版本时才会重新下载一次。
 
 ### 什么情况下手机端需要「重新安装」
 

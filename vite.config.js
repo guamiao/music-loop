@@ -35,21 +35,10 @@ export default defineConfig({
         // 注意：GenerateSW 模式不支持 glob 层面的 exclude 选项（workbox-build 7 会直接
         // 报 WorkboxConfigError 导致构建失败）。globPatterns 本身不包含 wasm，即不会预缓存。
         globPatterns: ['**/*.{js,css,html,svg,png}'],
-        // 约 32MB 的 ffmpeg WASM 不进 SW 预缓存（否则 SW 安装时下载该文件一旦挂起，
-        // 会阻塞所有经 SW 的请求，表现为提取音频永远“提取中”）。
-        // 改为运行时缓存：应用首次提取时下载并存入独立 Cache，之后秒开且可离线使用；
-        // 文件名带 hash，版本更新后 URL 变化会自动重新缓存。
-        runtimeCaching: [
-          {
-            urlPattern: /\.wasm$/,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'ffmpeg-wasm',
-              expiration: { maxEntries: 4 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
+        // 约 32MB 的 ffmpeg WASM 完全不经过 Service Worker：
+        // 应用默认从跨域的国内 CDN（npmmirror）下载（同源 SW 无法拦截跨域请求），
+        // 同源兜底 URL 又使用 HTTP Range 分块请求（SW 介入反而会影响 206 缓存）。
+        // 引擎由应用代码自行写入 Cache Storage（固定键），下载一次后永久秒开、可离线。
       },
     }),
   ],
